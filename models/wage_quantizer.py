@@ -34,22 +34,21 @@ def Q(x, bits):
         return x
     return torch.round(x*S(bits))/S(bits)
 
-def QW(x, bits, scale=1.0):
+def QW(x, bits, scale=1.0, mode="nearest"):
     y = Q(C(x, bits), bits)
     # per layer scaling
     if scale>1.8: y /= scale
     return y
 
-def QE(x, bits):
+def QE(x, bits, mode="nearest"):
     max_entry = x.abs().max()
     assert max_entry != 0, "QE blow"
     x /= shift(max_entry)
-    x = C(x, bits)
-    # x = fixed_point_quantize(x, FixedPoint(wl=bits, fl=bits-1, clamp=False, symmetric=False), "nearest")
     x = Q(x, bits)
+    x = C(x, bits)
     return x
 
-def QG(x, bits_G, bits_R, lr):
+def QG(x, bits_G, bits_R, lr, mode="nearest"):
     max_entry = x.abs().max()
     assert max_entry != 0, "QG blow"
     x /= shift(max_entry)
@@ -65,7 +64,8 @@ def QG(x, bits_G, bits_R, lr):
 
 class WAGERounding(Function):
     @staticmethod
-    def forward(self, x, bits_A, bits_E, optional, writer=None):
+    def forward(self, x, bits_A, bits_E, 
+                optional=None, writer=None):
         self.optional = optional
         self.bits_E = bits_E
         self.writer = writer
@@ -74,8 +74,7 @@ class WAGERounding(Function):
             ret = x
             self.mask = torch.zeros_like(x).byte()
         else:
-            # x = Q(x, bits_A)
-            x = fixed_point_quantize(x, FixedPoint(wl=bits_A, fl=bits_A-1, clamp=False, symmetric=True), "nearest")
+            x = Q(x, bits_A)
             t_max = 1- 1./S(bits_A)
             t_min = -1 + 1./S(bits_A)
             mask = (x > t_max) + (x < t_min)
@@ -108,7 +107,9 @@ class WAGERounding(Function):
 quantize_wage = WAGERounding.apply
 
 class WAGEQuantizer(Module):
-    def __init__(self, bits_A, bits_E, name="", writer=None):
+    def __init__(self, bits_A, bits_E,
+                 A_mode="nearest", E_mode="nearest",
+                 name="", writer=None):
         super(WAGEQuantizer, self).__init__()
         self.bits_A = bits_A
         self.bits_E = bits_E

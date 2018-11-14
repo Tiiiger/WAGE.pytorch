@@ -14,29 +14,29 @@ def shift(x, ceil=False):
     else:
         return x/2.**torch.round(torch.log2(max_entry))
 
-def QW(x, bits, scale=1.0):
-    y = fixed_point_quantize(x, FixedPoint(wl=bits, fl=bits-1, clamp=True, symmetric=True), rounding="nearest")
+def QW(x, bits, scale=1.0, mode="nearest"):
+    y = fixed_point_quantize(x, FixedPoint(wl=bits, fl=bits-1, clamp=True, symmetric=True), rounding=mode)
     # per layer scaling
     if scale>1.8: y /= scale
     return y
 
-def QG(x, bits_G, bits_R, lr):
-    # max_entry = x.abs().max()
-    # assert max_entry != 0, "QG blow"
+def QG(x, bits_G, bits_R, lr, mode="nearest"):
     x = shift(x)
     grad_number = FixedPoint(wl=bits_G, fl=bits_G-1, clamp=False, symmetric=True)
-    norm = fixed_point_quantize(lr*x, grad_number, rounding="stochastic")
+    norm = fixed_point_quantize(lr*x, grad_number, rounding=mode)
     return norm/(2.**((bits_G-1)))
 
 class WAGEQuantizer(Module):
-    def __init__(self, bits_A, bits_E, name="", writer=None):
+    def __init__(self, bits_A, bits_E,
+                 name="", writer=None,
+                 A_mode="nearest", E_mode="nearest"):
         super(WAGEQuantizer, self).__init__()
         self.name = name
         self.writer = writer
         self.activate_number = FixedPoint(wl=bits_A, fl=bits_A-1, clamp=True, symmetric=True) if bits_A != -1 else None
         self.error_number = FixedPoint(wl=bits_E, fl=bits_E-1, clamp=True, symmetric=True) if bits_E != -1 else None
-        self.quantizer = quantizer(forward_number=self.activate_number, forward_rounding="nearest",
-                                   backward_number=self.error_number, backward_rounding="nearest",
+        self.quantizer = quantizer(forward_number=self.activate_number, forward_rounding=A_mode,
+                                   backward_number=self.error_number, backward_rounding=E_mode,
                                    clamping_grad_zero=True, backward_hooks=[shift])
 
     def forward(self, x):

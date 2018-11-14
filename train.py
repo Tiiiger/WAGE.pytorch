@@ -14,6 +14,8 @@ import numpy as np
 from tensorboardX import SummaryWriter
 from torch.utils.data.sampler import SubsetRandomSampler
 
+num_types = ["weight", "activate", "grad", "error", "momentum"]
+
 parser = argparse.ArgumentParser(description='SGD/SWA training')
 parser.add_argument('--dir', type=str, default=None, required=True,
                     help='training directory (default: None)')
@@ -35,22 +37,14 @@ parser.add_argument('--log-name', type=str, default='', metavar='S',
                     help="Name for the log dir")
 parser.add_argument('--log-error', action='store_true', default=False,
                     help='Whether to log quantization error of weight and grad')
-parser.add_argument('--wl-weight', type=int, default=-1, metavar='N',
-                    help='word length in bits for weight output; -1 if full precision.')
-parser.add_argument('--fl-weight', type=int, default=-1, metavar='N',
-                    help='float length in bits for weight output; -1 if full precision.')
-parser.add_argument('--wl-grad', type=int, default=-1, metavar='N',
-                    help='word length in bits for gradient; -1 if full precision.')
-parser.add_argument('--fl-grad', type=int, default=-1, metavar='N',
-                    help='float length in bits for gradient; -1 if full precision.')
-parser.add_argument('--wl-activate', type=int, default=-1, metavar='N',
-                    help='word length in bits for layer activattions; -1 if full precision.')
-parser.add_argument('--fl-activate', type=int, default=-1, metavar='N',
-                    help='float length in bits for layer activations; -1 if full precision.')
-parser.add_argument('--wl-error', type=int, default=-1, metavar='N',
-                    help='word length in bits for backward error; -1 if full precision.')
-parser.add_argument('--fl-error', type=int, default=-1, metavar='N',
-                    help='float length in bits for backward error; -1 if full precision.')
+for num in num_types:
+    parser.add_argument('--wl-{}'.format(num), type=int, default=-1, metavar='N',
+                        help='word length in bits for {}; -1 if full precision.'.format(num))
+    parser.add_argument('--fl-{}'.format(num), type=int, default=-1, metavar='N',
+                        help='number of fractional bits for {}; -1 if full precision.'.format(num))
+    parser.add_argument('--{}-rounding'.format(num), type=str, default='stochastic', metavar='S',
+                        choices=["stochastic","nearest"],
+                        help='rounding method for {}, stochastic or nearest'.format(num))
 parser.add_argument('--wl-rand', type=int, default=-1, metavar='N',
                     help='word length in bits for rand number; -1 if full precision.')
 parser.add_argument('--qtorch', action='store_true', default=False,
@@ -92,11 +86,10 @@ a_summary = quant_summary(args.wl_activate, args.fl_activate)
 e_summary = quant_summary(args.wl_error, args.fl_error)
 print("W:{}, A:{}, G:{}, E:{}".format(w_summary, a_summary, g_summary, e_summary))
 
-weight_quantizer = lambda x, scale: quant_module.QW(x, args.wl_weight, scale)
+weight_quantizer = lambda x, scale: quant_module.QW(x, args.wl_weight, scale, mode=args.weight_rounding)
 grad_clip = lambda x : models.C(x, args.wl_weight)
 if args.wl_weight==-1: weight_quantizer = None
-if args.wl_grad ==-1: grad_quantier = None
-
+if args.wl_grad ==-1: grad_quantizer = None
 
 dir_name = args.dir + "-seed-{}".format(args.seed)
 print('Preparing checkpoint directory {}'.format(dir_name))
@@ -157,7 +150,9 @@ loaders = {
 # Build model
 print('Model: {}'.format(args.model))
 model_cfg = getattr(models, args.model)
-model_cfg.kwargs.update({"quantizer":quant_module.WAGEQuantizer, "wl_activate":args.wl_activate,
+from functools import partial
+m = partial(quant_module.WAGEQuantizer, A_mode=args.activate_rounding, E_mode=args.error_rounding)
+model_cfg.kwargs.update({"quantizer":m, "wl_activate":args.wl_activate,
                          "wl_error":args.wl_error, "wl_weight":args.wl_weight})
 
 if args.log_error:
@@ -199,7 +194,7 @@ for epoch in range(start_epoch, args.epochs):
     time_ep = time.time()
     lr = schedule(epoch)
     writer.add_scalar("lr", lr, epoch)
-    grad_quantizer = lambda x : quant_module.QG(x, args.wl_grad, args.wl_rand, lr)
+    grad_quantizer = lambda x : quant_module.QG(x, args.wl_grad, args.wl_rand, lr, mode=args.grad_rounding)
 
     train_res = utils.train_epoch(
             loaders['train'], model, criterion,

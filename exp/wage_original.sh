@@ -2,11 +2,11 @@
 
 python train.py \
     --dataset CIFAR10 \
-    --data_path ./data \
-    --dir ./checkpoint/wage-replicate/sgd \
+    --data_path ../data \
+    --dir ./checkpoint/wage-original/doubleC \
     --model VGG7LP \
     --epochs=300 \
-    --log-name wage-replicate/wage/ \
+    --log-name wage-original/doubleC/ \
     --wl-weight 2 \
     --wl-grad 8 \
     --wl-activate 8 \
