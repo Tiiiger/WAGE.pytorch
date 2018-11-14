@@ -4,9 +4,15 @@ from torch.nn import Module
 import torch.nn.functional as F
 from torch.autograd import Function
 
-def shift(x):
+from qtorch.quant import fixed_point_quantize, quantizer
+from qtorch import FixedPoint
+
+def shift(x, ceil=True):
     #TODO: edge case, when x contains 0
-    return 2.**torch.round(torch.log2(x))
+    if ceil:
+        return 2.**torch.ceil(torch.log2(x))
+    else:
+        return 2.**torch.round(torch.log2(x))
 
 def S(bits):
     return 2.**(bits-1)
@@ -38,7 +44,10 @@ def QE(x, bits):
     max_entry = x.abs().max()
     assert max_entry != 0, "QE blow"
     x /= shift(max_entry)
-    return Q(C(x, bits), bits)
+    x = C(x, bits)
+    # x = fixed_point_quantize(x, FixedPoint(wl=bits, fl=bits-1, clamp=False, symmetric=False), "nearest")
+    x = Q(x, bits)
+    return x
 
 def QG(x, bits_G, bits_R, lr):
     max_entry = x.abs().max()
@@ -56,13 +65,22 @@ def QG(x, bits_G, bits_R, lr):
 
 class WAGERounding(Function):
     @staticmethod
-    def forward(self, x, bits_A, bits_E, optional):
+    def forward(self, x, bits_A, bits_E, optional, writer=None):
         self.optional = optional
         self.bits_E = bits_E
-        self.save_for_backward(x)
+        self.writer = writer
 
-        if bits_A == -1: ret = x
-        else: ret = Q(x, bits_A)
+        if bits_A == -1:
+            ret = x
+            self.mask = torch.zeros_like(x).byte()
+        else:
+            # x = Q(x, bits_A)
+            x = fixed_point_quantize(x, FixedPoint(wl=bits_A, fl=bits_A-1, clamp=False, symmetric=True), "nearest")
+            t_max = 1- 1./S(bits_A)
+            t_min = -1 + 1./S(bits_A)
+            mask = (x > t_max) + (x < t_min)
+            ret = torch.clamp(x, t_min, t_max)
+            self.mask = mask
 
         return ret
 
@@ -72,7 +90,8 @@ class WAGERounding(Function):
 
         if self.needs_input_grad[0]:
             try:
-                grad_input = QE(grad_output, self.bits_E)
+                grad_input = QE(grad_output, self.bits_E).masked_fill_(self.mask, 0)
+                # grad_input = QE(grad_output, self.bits_E)
             except AssertionError as e:
                 print("="*80)
                 print("Error backward:%s"%self.optional)
@@ -84,7 +103,7 @@ class WAGERounding(Function):
         else:
             grad_input = grad_output
 
-        return grad_input, None, None, None
+        return grad_input, None, None, None, None
 
 quantize_wage = WAGERounding.apply
 
@@ -97,8 +116,8 @@ class WAGEQuantizer(Module):
         self.writer = writer
 
     def forward(self, x):
-        if self.bits_A != -1:
-            x = C(x, self.bits_A) #  keeps the gradients
+        # if self.bits_A != -1:
+        #     x = C(x, self.bits_A) #  keeps the gradients
         y = quantize_wage(x, self.bits_A, self.bits_E, self.name)
         if self.writer is not None:
             self.writer.add_histogram(

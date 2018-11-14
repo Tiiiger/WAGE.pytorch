@@ -6,18 +6,19 @@ import torch
 import torch.nn as nn
 from .wage_quantizer import WAGEQuantizer, Q
 from .wage_initializer import wage_init_
+from qtorch.quant import fixed_point_quantize
+from qtorch import FixedPoint
 import math
 
 __all__ = ['VGG7LP']
 
 class VGG(nn.Module):
-    def __init__(self, wl_activate=-1, fl_activate=-1, wl_error=-1, fl_error=-1,
+    def __init__(self, quantizer, wl_activate, wl_error,
                  num_classes=10, depth=16, batch_norm=False, wl_weight=-1, writer=None):
         super(VGG, self).__init__()
-        quant = lambda name : WAGEQuantizer(wl_activate, wl_error, name, writer=writer)
+        quant = lambda name : quantizer(wl_activate, wl_error, name, writer=writer)
         self.features = nn.Sequential(*[
-            WAGEQuantizer(wl_activate, -1, "input"), # only quantizing forward
-
+            quantizer(wl_activate, -1, "input"),
             # Group 1
             nn.Conv2d(3, 128, kernel_size=3, padding=1, bias=False),
             nn.ReLU(inplace=True),
@@ -54,7 +55,7 @@ class VGG(nn.Module):
             nn.ReLU(inplace=True),
             quant("classifier-lin"),
             nn.Linear(1024, num_classes, bias=False),
-            WAGEQuantizer(-1, wl_error, "bf-loss") # only quantizing backward pass
+            quantizer(-1, wl_error, "bf-loss") # only quantizing backward pass
         )
 
         self.weight_scale = {}

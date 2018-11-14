@@ -9,6 +9,7 @@ import torchvision.datasets as datasets
 import utils
 import tabulate
 import models
+import wage_qtorch
 import numpy as np
 from tensorboardX import SummaryWriter
 from torch.utils.data.sampler import SubsetRandomSampler
@@ -52,6 +53,8 @@ parser.add_argument('--fl-error', type=int, default=-1, metavar='N',
                     help='float length in bits for backward error; -1 if full precision.')
 parser.add_argument('--wl-rand', type=int, default=-1, metavar='N',
                     help='word length in bits for rand number; -1 if full precision.')
+parser.add_argument('--qtorch', action='store_true', default=False,
+                    help='Whether to use qtorch quantization.')
 
 args = parser.parse_args()
 
@@ -61,10 +64,15 @@ torch.manual_seed(args.seed)
 torch.cuda.manual_seed(args.seed)
 np.random.seed(args.seed)
 
+if args.qtorch:
+    quant_module = wage_qtorch
+else:
+    quant_module = models
+
 
 # Tensorboard Writer
 if args.log_name != "":
-    log_name = args.log_name
+    log_name = args.log_name+"-{}".format(time.time())
 else:
     log_name = "time%d"%int(time.time)
 print("Logging at {}".format(log_name))
@@ -84,7 +92,7 @@ a_summary = quant_summary(args.wl_activate, args.fl_activate)
 e_summary = quant_summary(args.wl_error, args.fl_error)
 print("W:{}, A:{}, G:{}, E:{}".format(w_summary, a_summary, g_summary, e_summary))
 
-weight_quantizer = lambda x, scale: models.QW(x, args.wl_weight, scale)
+weight_quantizer = lambda x, scale: quant_module.QW(x, args.wl_weight, scale)
 grad_clip = lambda x : models.C(x, args.wl_weight)
 if args.wl_weight==-1: weight_quantizer = None
 if args.wl_grad ==-1: grad_quantier = None
@@ -149,11 +157,8 @@ loaders = {
 # Build model
 print('Model: {}'.format(args.model))
 model_cfg = getattr(models, args.model)
-model_cfg.kwargs.update({
-    "wl_activate":args.wl_activate, "fl_activate":args.fl_activate,
-    "wl_error":args.wl_error, "fl_error":args.fl_error,
-    "wl_weight":args.wl_weight,
-})
+model_cfg.kwargs.update({"quantizer":quant_module.WAGEQuantizer, "wl_activate":args.wl_activate,
+                         "wl_error":args.wl_error, "wl_weight":args.wl_weight})
 
 if args.log_error:
     model = model_cfg.base(
@@ -194,7 +199,7 @@ for epoch in range(start_epoch, args.epochs):
     time_ep = time.time()
     lr = schedule(epoch)
     writer.add_scalar("lr", lr, epoch)
-    grad_quantizer = lambda x : models.QG(x, args.wl_grad, args.wl_rand, lr)
+    grad_quantizer = lambda x : quant_module.QG(x, args.wl_grad, args.wl_rand, lr)
 
     train_res = utils.train_epoch(
             loaders['train'], model, criterion,
@@ -221,5 +226,3 @@ for epoch in range(start_epoch, args.epochs):
     else:
         table = table.split('\n')[2]
     print(table)
-
-
